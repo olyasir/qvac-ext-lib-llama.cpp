@@ -135,6 +135,23 @@ add_library(llama
             models/xverse.cpp
             models/mistral3.cpp
             models/graph-context-mamba.cpp
+            llama-registry.cpp
+            fabric/tensor.cpp
+            fabric/qwen3.cpp
+            fabric/xverse.cpp
+            fabric/refact.cpp
+            fabric/qwen2.cpp
+            fabric/gemma.cpp
+            fabric/starcoder2.cpp
+            fabric/internlm2.cpp
+            fabric/orion.cpp
+            fabric/plamo.cpp
+            fabric/exaone.cpp
+            fabric/llama.cpp
+            fabric/arcee.cpp
+            fabric/hunyuan_dense.cpp
+            fabric/nemotron.cpp
+            fabric/command_r.cpp
             )
 
 set_target_properties(llama PROPERTIES
@@ -147,6 +164,7 @@ target_include_directories(
   llama
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/llama>)
 
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump

@@ -426,6 +426,9 @@ struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
+    // for external architectures: stores the GGUF general.architecture string
+    std::string ext_arch_name;
+
     std::string name = "n/a";
 
     llama_hparams hparams = {};

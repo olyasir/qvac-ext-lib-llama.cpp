@@ -4487,6 +4487,142 @@ class GPT2Model(TextModel):
         return tensors
 
 
+@ModelBase.register("XGLMForCausalLM")
+class XGLMModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.XGLM
+
+    def set_vocab(self):
+        # XGLM uses a fairseq-based SentencePiece tokenizer with ID offsets.
+        # The fairseq vocab inserts <pad> at position 1 and shifts all regular
+        # SPM tokens by +1, so: model_id = spm_id + 1 (for spm_id >= 3).
+        # Special tokens <s>=0, <pad>=1, </s>=2, <unk>=3 are hardcoded.
+        from sentencepiece import SentencePieceProcessor
+
+        tokenizer_path = self.dir_model / 'sentencepiece.bpe.model'
+        if not tokenizer_path.is_file():
+            tokenizer_path = self.dir_model / 'tokenizer.model'
+
+        if not tokenizer_path.is_file():
+            raise FileNotFoundError(f"File not found: {tokenizer_path}")
+
+        tokenizer = SentencePieceProcessor()
+        tokenizer.LoadFromFile(str(tokenizer_path))
+
+        vocab_size = self.hparams.get("vocab_size", tokenizer.vocab_size())
+        fairseq_offset = 1
+        num_madeup_words = 7
+        sp_size = tokenizer.vocab_size()
+
+        tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
+        scores: list[float] = [-10000.0] * vocab_size
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
+
+        # Hardcoded fairseq special tokens (positions 0-3)
+        tokens[0]   = b"<s>"
+        scores[0]   = 0.0
+        toktypes[0] = SentencePieceTokenTypes.CONTROL   # BOS
+
+        tokens[1]   = b"<pad>"
+        scores[1]   = 0.0
+        toktypes[1] = SentencePieceTokenTypes.CONTROL   # PAD
+
+        tokens[2]   = b"</s>"
+        scores[2]   = 0.0
+        toktypes[2] = SentencePieceTokenTypes.CONTROL   # EOS
+
+        tokens[3]   = b"<unk>"
+        scores[3]   = 0.0
+        toktypes[3] = SentencePieceTokenTypes.UNKNOWN   # UNK
+
+        # Map regular SPM tokens with fairseq offset
+        for spm_id in range(tokenizer.vocab_size()):
+            # Skip SPM special tokens 0-2 (unk, bos, eos) — handled above
+            if spm_id < 3:
+                continue
+
+            piece = tokenizer.IdToPiece(spm_id)
+            text = piece.encode("utf-8")
+            score = tokenizer.GetScore(spm_id)
+
+            toktype = SentencePieceTokenTypes.NORMAL
+            if tokenizer.IsUnknown(spm_id):
+                toktype = SentencePieceTokenTypes.UNKNOWN
+            elif tokenizer.IsControl(spm_id):
+                toktype = SentencePieceTokenTypes.CONTROL
+            elif tokenizer.IsUnused(spm_id):
+                toktype = SentencePieceTokenTypes.UNUSED
+            elif tokenizer.IsByte(spm_id):
+                toktype = SentencePieceTokenTypes.BYTE
+
+            model_id = spm_id + fairseq_offset
+            if model_id < vocab_size:
+                tokens[model_id] = text
+                scores[model_id] = score
+                toktypes[model_id] = toktype
+
+        # Madeupword tokens at the end of the vocab
+        for i in range(num_madeup_words):
+            model_id = sp_size + fairseq_offset + i
+            if model_id < vocab_size:
+                tokens[model_id] = f"<madeupword{i}>".encode("utf-8")
+                scores[model_id] = -10000.0
+                toktypes[model_id] = SentencePieceTokenTypes.CONTROL
+
+        self.gguf_writer.add_tokenizer_model("llama")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        d_model = self.hparams["d_model"]
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
+        self.gguf_writer.add_embedding_length(d_model)
+        self.gguf_writer.add_feed_forward_length(self.hparams["ffn_dim"])
+        self.gguf_writer.add_head_count(self.hparams["attention_heads"])
+        self.gguf_writer.add_head_count_kv(self.hparams["attention_heads"])
+        self.gguf_writer.add_layer_norm_eps(1e-5)
+        self.gguf_writer.add_file_type(self.ftype)
+
+    def _generate_sinusoidal_embeddings(self) -> Tensor:
+        """Pre-compute XGLM sinusoidal position embeddings (offset=2)."""
+        import numpy as np
+        max_pos = self.hparams["max_position_embeddings"]
+        d_model = self.hparams["d_model"]
+        offset = 2
+
+        half_dim = d_model // 2
+        emb = np.log(10000.0) / (half_dim - 1)
+        emb = np.exp(np.arange(half_dim, dtype=np.float32) * -emb)
+        positions = (np.arange(max_pos, dtype=np.float32) + offset)
+        emb = positions[:, np.newaxis] * emb[np.newaxis, :]
+        emb = np.concatenate([np.sin(emb), np.cos(emb)], axis=1).astype(np.float32)
+        if d_model % 2 == 1:
+            emb = np.concatenate([emb, np.zeros((max_pos, 1), dtype=np.float32)], axis=1)
+        return torch.from_numpy(emb)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # Skip sinusoidal embedding buffers (not learned, we pre-compute them)
+        if "embed_positions" in name:
+            return []
+
+        tensors: list[tuple[str, Tensor]] = []
+
+        # Generate pre-computed sinusoidal position embeddings alongside token embeddings
+        if name == "model.embed_tokens.weight":
+            tensors.append(("position_embd.weight", self._generate_sinusoidal_embeddings()))
+
+        new_name = self.map_tensor_name(name)
+        tensors.append((new_name, data_torch))
+        return tensors
+
+
 @ModelBase.register("PhiForCausalLM")
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2

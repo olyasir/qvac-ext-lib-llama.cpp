@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama-mmap.h"
 #include "llama-model-load.h"
+#include "llama-registry.h"
 
 #include <array>
 #include <cinttypes>
@@ -531,6 +532,11 @@ llama_model_loader::llama_model_loader(
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+
+    // for external architectures, set the real arch name for KV/TN resolution
+    if (llm_kv.arch == LLM_ARCH_EXTERNAL) {
+        llm_arch_set_external_arch_name(arch_name.c_str());
+    }
 
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);

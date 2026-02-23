@@ -1,6 +1,7 @@
 #include "llama-arch.h"
 
 #include "llama-impl.h"
+#include "llama-registry.h"
 
 #include <map>
 
@@ -112,6 +113,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
+    { LLM_ARCH_EXTERNAL,         "(external)"       },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -2541,6 +2543,10 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_EXTERNAL,
+        {},  // populated dynamically from the registry
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2747,7 +2753,17 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    const char * arch_str = LLM_ARCH_NAMES.at(arch);
+
+    // for external architectures, use the real arch name from the registry
+    if (arch == LLM_ARCH_EXTERNAL) {
+        const char * ext_name = llm_arch_get_external_arch_name();
+        if (ext_name) {
+            arch_str = ext_name;
+        }
+    }
+
+    std::string name = ::format(LLM_KV_NAMES.at(kv), arch_str);
 
     if (suffix != nullptr) {
         name += ".";
@@ -2758,11 +2774,30 @@ std::string LLM_KV::operator()(llm_kv kv) const {
 }
 
 std::string LLM_TN_IMPL::str() const {
-    if (LLM_TENSOR_NAMES.at(arch).find(tensor) == LLM_TENSOR_NAMES.at(arch).end()) {
+    const char * fmt = nullptr;
+
+    if (arch == LLM_ARCH_EXTERNAL) {
+        // look up from the dynamically-set external tensor names
+        auto * ext_names = llm_arch_get_external_tensor_names();
+        if (ext_names) {
+            auto it = ext_names->find(tensor);
+            if (it != ext_names->end()) {
+                fmt = it->second;
+            }
+        }
+    } else {
+        auto & names = LLM_TENSOR_NAMES.at(arch);
+        auto it = names.find(tensor);
+        if (it != names.end()) {
+            fmt = it->second;
+        }
+    }
+
+    if (!fmt) {
         return "__missing__";
     }
 
-    std::string name = ::format(LLM_TENSOR_NAMES.at(arch).at(tensor), bid, xid);
+    std::string name = ::format(fmt, bid, xid);
 
     if (suffix != nullptr) {
         name += ".";
@@ -2773,6 +2808,12 @@ std::string LLM_TN_IMPL::str() const {
 }
 
 const char * llm_arch_name(llm_arch arch) {
+    if (arch == LLM_ARCH_EXTERNAL) {
+        const char * ext_name = llm_arch_get_external_arch_name();
+        if (ext_name) {
+            return ext_name;
+        }
+    }
     auto it = LLM_ARCH_NAMES.find(arch);
     if (it == LLM_ARCH_NAMES.end()) {
         return "unknown";
@@ -2785,6 +2826,11 @@ llm_arch llm_arch_from_string(const std::string & name) {
         if (kv.second == name) {
             return kv.first;
         }
+    }
+
+    // check the external architecture registry
+    if (llama_arch_lookup(name) != nullptr) {
+        return LLM_ARCH_EXTERNAL;
     }
 
     return LLM_ARCH_UNKNOWN;
@@ -2803,6 +2849,15 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
             return true;
+        case LLM_ARCH_EXTERNAL:
+            {
+                const char * ext_name = llm_arch_get_external_arch_name();
+                if (ext_name) {
+                    const auto * info = llama_arch_lookup(ext_name);
+                    if (info) return info->is_recurrent;
+                }
+                return false;
+            }
         default:
             return false;
     }
@@ -2819,6 +2874,15 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_NEMOTRON_H:
         case LLM_ARCH_QWEN3NEXT:
             return true;
+        case LLM_ARCH_EXTERNAL:
+            {
+                const char * ext_name = llm_arch_get_external_arch_name();
+                if (ext_name) {
+                    const auto * info = llama_arch_lookup(ext_name);
+                    if (info) return info->is_hybrid;
+                }
+                return false;
+            }
         default:
             return false;
     }
@@ -2831,6 +2895,15 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
             return true;
+        case LLM_ARCH_EXTERNAL:
+            {
+                const char * ext_name = llm_arch_get_external_arch_name();
+                if (ext_name) {
+                    const auto * info = llama_arch_lookup(ext_name);
+                    if (info) return info->is_diffusion;
+                }
+                return false;
+            }
         default:
             return false;
     }

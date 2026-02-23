@@ -271,6 +271,33 @@ install(
   PUBLIC_HEADER
     DESTINATION ${LLAMA_INCLUDE_INSTALL_DIR})
 
+# Fabric SDK public headers
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/fabric.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/tensor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/context.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/modules.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/pipeline.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/nn.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/nn_modules.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/model.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/fabric/runner.h
+    DESTINATION ${LLAMA_INCLUDE_INSTALL_DIR}/fabric)
+
+# Internal headers required by the Fabric SDK (semi-public)
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-graph.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-model.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-arch.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-hparams.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-cparams.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-adapter.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-batch.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-memory.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-vocab.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/llama-registry.h
+    DESTINATION ${LLAMA_INCLUDE_INSTALL_DIR})
+
 if (LLAMA_BUILD_COMMON)
 
   if (NOT LLAMA_CURL)

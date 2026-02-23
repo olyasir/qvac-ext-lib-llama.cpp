@@ -415,6 +415,67 @@ struct llm_build_qwen3 : public llm_graph_context {
     llm_build_qwen3(const llama_model & model, const llm_graph_params & params);
 };
 
+// Fabric DSL builders
+struct fabric_build_qwen3 : public llm_graph_context {
+    fabric_build_qwen3(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_xverse : public llm_graph_context {
+    fabric_build_xverse(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_refact : public llm_graph_context {
+    fabric_build_refact(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_qwen2 : public llm_graph_context {
+    fabric_build_qwen2(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_gemma : public llm_graph_context {
+    fabric_build_gemma(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_starcoder2 : public llm_graph_context {
+    fabric_build_starcoder2(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_internlm2 : public llm_graph_context {
+    fabric_build_internlm2(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_orion : public llm_graph_context {
+    fabric_build_orion(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_plamo : public llm_graph_context {
+    fabric_build_plamo(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_exaone : public llm_graph_context {
+    fabric_build_exaone(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_llama : public llm_graph_context {
+    fabric_build_llama(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_arcee : public llm_graph_context {
+    fabric_build_arcee(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_hunyuan_dense : public llm_graph_context {
+    fabric_build_hunyuan_dense(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_nemotron : public llm_graph_context {
+    fabric_build_nemotron(const llama_model & model, const llm_graph_params & params);
+};
+
+struct fabric_build_command_r : public llm_graph_context {
+    fabric_build_command_r(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_qwen3moe : public llm_graph_context {
     llm_build_qwen3moe(const llama_model & model, const llm_graph_params & params);
 };

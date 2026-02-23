@@ -4,6 +4,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-registry.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -472,6 +473,10 @@ void llama_model::load_arch(llama_model_loader & ml) {
     arch = ml.get_arch();
     if (arch == LLM_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
+    }
+    if (arch == LLM_ARCH_EXTERNAL) {
+        ext_arch_name = ml.get_arch_name();
+        llm_arch_set_external_arch_name(ext_arch_name.c_str());
     }
 }
 
@@ -2284,6 +2289,17 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 40: type = LLM_TYPE_14B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_EXTERNAL:
+            {
+                auto * info = llama_arch_lookup(ext_arch_name);
+                GGML_ASSERT(info);
+                if (info->load_hparams) {
+                    info->load_hparams(ml, hparams);
+                } else {
+                    llama_arch_load_hparams_generic(ml, hparams);
+                }
+                type = LLM_TYPE_UNKNOWN;
             } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
@@ -6564,6 +6580,112 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", i), { hparams.n_ff_shexp, n_embd }, 0);
                     }
                 } break;
+            case LLM_ARCH_EXTERNAL:
+                {
+                    auto * info = llama_arch_lookup(ext_arch_name);
+                    GGML_ASSERT(info);
+
+                    // set the external tensor names for LLM_TN resolution
+                    llm_arch_set_external_tensor_names(&info->tensor_names);
+
+                    if (info->create_tensors) {
+                        info->create_tensors(*this, ml);
+                    } else {
+                        // generic tensor creation from the registered tensor name table
+                        const auto & tnames = info->tensor_names;
+
+                        // model-level tensors
+                        if (tnames.count(LLM_TENSOR_TOKEN_EMBD)) {
+                            tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                        }
+                        if (tnames.count(LLM_TENSOR_POS_EMBD)) {
+                            pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD, "weight"), {n_embd, n_ctx_train}, 0);
+                        }
+                        if (tnames.count(LLM_TENSOR_OUTPUT_NORM)) {
+                            output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                            output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+                        }
+                        if (tnames.count(LLM_TENSOR_OUTPUT)) {
+                            output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                        }
+                        // weight tying fallback
+                        if (output == nullptr && tnames.count(LLM_TENSOR_TOKEN_EMBD)) {
+                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                        }
+
+                        // per-layer tensors
+                        for (int i = 0; i < n_layer; ++i) {
+                            auto & layer = layers[i];
+
+                            if (tnames.count(LLM_TENSOR_ATTN_NORM)) {
+                                layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                                layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_Q)) {
+                                layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd}, 0);
+                                layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_K)) {
+                                layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                                layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", i),   {n_embd_k_gqa}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_V)) {
+                                layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                                layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", i),   {n_embd_v_gqa}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_QKV)) {
+                                layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, 0);
+                                layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_OUT)) {
+                                layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                                layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_POST_NORM)) {
+                                layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_NORM)) {
+                                layer.ffn_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                                layer.ffn_norm_b = create_tensor(tn(LLM_TENSOR_FFN_NORM, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_GATE)) {
+                                layer.ffn_gate   = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+                                layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_DOWN)) {
+                                layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                                layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_UP)) {
+                                layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ff}, 0);
+                                layer.ffn_up_b = create_tensor(tn(LLM_TENSOR_FFN_UP, "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_POST_NORM)) {
+                                layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_Q_NORM)) {
+                                layer.attn_q_norm   = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
+                                layer.attn_q_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "bias", i),   {n_embd_head_k}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_K_NORM)) {
+                                layer.attn_k_norm   = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
+                                layer.attn_k_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "bias", i),   {n_embd_head_k}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_LAYER_OUT_NORM)) {
+                                layer.layer_out_norm   = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                                layer.layer_out_norm_b = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_ATTN_GATE)) {
+                                layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                            }
+                            if (tnames.count(LLM_TENSOR_FFN_ACT)) {
+                                layer.ffn_act = create_tensor(tn(LLM_TENSOR_FFN_ACT, "weight", i), {n_ff}, TENSOR_NOT_REQUIRED);
+                            }
+                        }
+                    }
+
+                    llm_arch_set_external_tensor_names(nullptr);
+                } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -7208,7 +7330,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     switch (arch) {
         case LLM_ARCH_LLAMA:
             {
-                llm = std::make_unique<llm_build_llama>(*this, params);
+                llm = std::make_unique<fabric_build_llama>(*this, params);
             } break;
         case LLM_ARCH_LLAMA4:
             {
@@ -7240,7 +7362,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_REFACT:
             {
-                llm = std::make_unique<llm_build_refact>(*this, params);
+                llm = std::make_unique<fabric_build_refact>(*this, params);
             } break;
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
@@ -7272,7 +7394,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN2:
             {
-                llm = std::make_unique<llm_build_qwen2>(*this, params);
+                llm = std::make_unique<fabric_build_qwen2>(*this, params);
             } break;
         case LLM_ARCH_DREAM:
             {
@@ -7304,7 +7426,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3:
             {
-                llm = std::make_unique<llm_build_qwen3>(*this, params);
+                llm = std::make_unique<fabric_build_qwen3>(*this, params);
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
@@ -7333,7 +7455,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_PLAMO:
             {
-                llm = std::make_unique<llm_build_plamo>(*this, params);
+                llm = std::make_unique<fabric_build_plamo>(*this, params);
             } break;
         case LLM_ARCH_PLAMO2:
             {
@@ -7349,11 +7471,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_ORION:
             {
-                llm = std::make_unique<llm_build_orion>(*this, params);
+                llm = std::make_unique<fabric_build_orion>(*this, params);
             } break;
         case LLM_ARCH_INTERNLM2:
             {
-                llm = std::make_unique<llm_build_internlm2>(*this, params);
+                llm = std::make_unique<fabric_build_internlm2>(*this, params);
             } break;
         case LLM_ARCH_MINICPM3:
             {
@@ -7361,7 +7483,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GEMMA:
             {
-                llm = std::make_unique<llm_build_gemma>(*this, params);
+                llm = std::make_unique<fabric_build_gemma>(*this, params);
             } break;
         case LLM_ARCH_GEMMA2:
             {
@@ -7381,7 +7503,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_STARCODER2:
             {
-                llm = std::make_unique<llm_build_starcoder2>(*this, params);
+                llm = std::make_unique<fabric_build_starcoder2>(*this, params);
             } break;
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
@@ -7394,11 +7516,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_XVERSE:
             {
-                llm = std::make_unique<llm_build_xverse>(*this, params);
+                llm = std::make_unique<fabric_build_xverse>(*this, params);
             } break;
         case LLM_ARCH_COMMAND_R:
             {
-                llm = std::make_unique<llm_build_command_r>(*this, params);
+                llm = std::make_unique<fabric_build_command_r>(*this, params);
             } break;
         case LLM_ARCH_COHERE2:
             {
@@ -7485,7 +7607,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_NEMOTRON:
             {
-                llm = std::make_unique<llm_build_nemotron>(*this, params);
+                llm = std::make_unique<fabric_build_nemotron>(*this, params);
             } break;
         case LLM_ARCH_NEMOTRON_H:
             {
@@ -7493,7 +7615,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_EXAONE:
             {
-                llm = std::make_unique<llm_build_exaone>(*this, params);
+                llm = std::make_unique<fabric_build_exaone>(*this, params);
             } break;
         case LLM_ARCH_EXAONE4:
             {
@@ -7559,7 +7681,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_ARCEE:
             {
-                llm = std::make_unique<llm_build_arcee>(*this, params);
+                llm = std::make_unique<fabric_build_arcee>(*this, params);
             } break;
         case LLM_ARCH_AFMOE:
             {
@@ -7579,7 +7701,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_HUNYUAN_DENSE:
             {
-                llm = std::make_unique<llm_build_hunyuan_dense>(*this, params);
+                llm = std::make_unique<fabric_build_hunyuan_dense>(*this, params);
             } break;
         case LLM_ARCH_SMOLLM3:
             {
@@ -7633,6 +7755,14 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_MISTRAL3:
             {
                 llm = std::make_unique<llm_build_mistral3>(*this, params);
+            } break;
+        case LLM_ARCH_EXTERNAL:
+            {
+                auto * info = llama_arch_lookup(ext_arch_name);
+                GGML_ASSERT(info && info->build_graph);
+                llm_arch_set_external_tensor_names(&info->tensor_names);
+                llm = info->build_graph(*this, params);
+                llm_arch_set_external_tensor_names(nullptr);
             } break;
         default:
             GGML_ABORT("fatal error");
@@ -7771,7 +7901,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARWKV7:
         case LLM_ARCH_WAVTOKENIZER_DEC:
         case LLM_ARCH_NEMOTRON_H:
-            return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
         case LLM_ARCH_LLAMA:
@@ -7869,6 +7998,12 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:
             return LLAMA_ROPE_TYPE_IMROPE;
+
+        case LLM_ARCH_EXTERNAL:
+            {
+                auto * info = llama_arch_lookup(model->ext_arch_name);
+                return info ? info->rope_type : LLAMA_ROPE_TYPE_NONE;
+            }
 
         // all model arches should be listed explicitly here
         case LLM_ARCH_UNKNOWN:

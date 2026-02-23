@@ -61,6 +61,7 @@ class TensorNameMap:
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
+            "model.embed_positions",           # xglm
         ),
 
         # Output
@@ -105,6 +106,7 @@ class TensorNameMap:
             "model.norm",                              # llama4
             "model.transformer.ln_f",                  # llada
             "model.norm",                              # cogvlm
+            "model.layer_norm",                        # xglm
         ),
 
         # Rope frequencies
@@ -154,7 +156,8 @@ class TensorNameMap:
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
-            "model.layers.{bid}.attention_layernorm"                # apertus
+            "model.layers.{bid}.attention_layernorm",               # apertus
+            "model.layers.{bid}.self_attn_layer_norm",              # xglm
         ),
 
         # Attention norm 2
@@ -342,6 +345,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
+            "model.layers.{bid}.final_layer_norm",                           # xglm
         ),
 
         # Pre feed-forward norm
@@ -431,6 +435,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
             "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.up_proj",            # cogvlm
+            "model.layers.{bid}.fc1",                                  # xglm
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -537,6 +542,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
+            "model.layers.{bid}.fc2",                                  # xglm
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
